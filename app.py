@@ -198,5 +198,5 @@ if user_role == "Driver":
     # 10-Hour Driving Limit Intercept
     if total_driving_mins >= 570: # 9 hours 30 mins
         st.error("🚨 **CRITICAL SAFETY REACH WARNING: MAXIMUM DRIVING CAPACITY REACHED**")
-        st.markdown(\
+        st.markdown()
     Hertfordshire Couriers Ltd policy strictly dictates a maximum driving boundary. 
