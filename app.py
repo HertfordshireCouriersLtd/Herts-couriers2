@@ -199,5 +199,4 @@ if user_role == "Driver":
     if total_driving_mins >= 570: # 9 hours 30 mins
         st.error("🚨 **CRITICAL SAFETY REACH WARNING: MAXIMUM DRIVING CAPACITY REACHED**")
         st.markdown(
-            f"""\
     Hertfordshire Couriers Ltd policy strictly dictates a maximum driving boundary. 
