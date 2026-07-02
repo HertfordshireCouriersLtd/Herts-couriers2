@@ -1,202 +1,199 @@
 import sqlite3
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
-DB_FILE = "herts_couriers_v3.db"
-COMPANY_EMAIL = "info@hertfordshirecouriersltd.co.uk"
-OFFICE_PHONE = "01462-675328"
+DB_FILE = "herts_couriers.db"
 
 # ==========================================
-# DATABASE SCHEMAS & INITIALISATION
+# DATABASE INITIALISATION
 # ==========================================
 def init_db():
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        
-        # User Profiles (Licence and Holiday metadata)
+        # Shifts table tracking start and finish times
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                role TEXT NOT NULL,
-                last_licence_check TEXT NOT NULL, -- YYYY-MM-DD
-                licence_approved INTEGER DEFAULT 1, -- 1=True, 0=Locked Out
-                holiday_entitlement INTEGER DEFAULT 28,
-                holiday_taken INTEGER DEFAULT 0
-            )
-        """)
-        
-        # Extended Duty & Shift Time Logs
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS activities (
+            CREATE TABLE IF NOT EXISTS shifts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 driver_name TEXT NOT NULL,
                 date TEXT NOT NULL,
-                activity_type TEXT NOT NULL, -- Driving, Warehouse, Waiting, Lunch
-                start_time TEXT NOT NULL,
+                start_time TEXT,
                 end_time TEXT,
-                cumulative_driving_mins INTEGER DEFAULT 0,
-                alert_triggered INTEGER DEFAULT 0
+                status TEXT DEFAULT 'Not Started'
             )
         """)
-        
-        # Structured Defect Audit Reports
+        # Defect reports table tracking pre-work and post-work checks
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS defects_v3 (
+            CREATE TABLE IF NOT EXISTS defects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 driver_name TEXT NOT NULL,
+                vehicle_reg TEXT NOT NULL,
                 date TEXT NOT NULL,
-                check_type TEXT NOT NULL, -- Morning / End of Shift
-                mileage INTEGER NOT NULL,
-                clean_inside TEXT NOT NULL,
-                clean_outside TEXT NOT NULL,
-                straps_count INTEGER NOT NULL,
-                has_trolley TEXT NOT NULL,
-                doors_locked TEXT NOT NULL,
-                tyre_tread TEXT NOT NULL,
-                fuel_full TEXT NOT NULL,
-                fuel_photo_bytes BLOB,
-                photo_in_bytes BLOB,
-                photo_out_bytes BLOB
+                check_type TEXT NOT NULL, -- 'Pre-Work' or 'End of Shift'
+                has_defects TEXT NOT NULL,
+                details TEXT,
+                resolved_status TEXT DEFAULT 'Open'
             )
         """)
-
-        # Leave Planning & Absence Audit
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS leave_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                driver_name TEXT NOT NULL,
-                leave_type TEXT NOT NULL, -- Holiday, Sickness, Absence
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                days_requested INTEGER NOT NULL,
-                status TEXT NOT NULL -- Approved, Automatically Rejected
-            )
-        """)
-        
-        # Seed test profile if database is completely fresh
-        cursor.execute("SELECT COUNT(*) FROM users")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO users VALUES ('driver1', 'Driver', '2026-01-15', 1, 28, 4)")
-            cursor.execute("INSERT INTO users VALUES ('manager1', 'Manager', '2026-01-01', 1, 28, 0)")
         conn.commit()
 
 init_db()
 
 # ==========================================
-# SIMULATED INTERFACE NOTIFICATIONS / EMAILS
+# APP LAYOUT & CONFIGURATION
 # ==========================================
-def simulate_email(to_address, subject, message):
-    st.toast(f"📧 **Email Sent to {to_address}**\n\n*Subject:* {subject}\n\n{message}", icon="✉️")
-
-# ==========================================
-# STREAMLIT UI ARCHITECTURE
-# ==========================================
-st.markdown(
-    """
-    <style>
-    .stButton>button { border-radius: 6px; font-weight: bold; }
-    div.stButton > button:first-child { background-color: #2e7d32; color: white; } /* Default Green */
-    .emergency-btn > divAndButton > button { background-color: #c62828 !important; color: white !important; }
-    </style>
-    """, 
-    unsafe_map=True
-)
-
+st.set_page_config(page_title="Hertfordshire Couriers Portal", page_icon="🚚", layout="wide")
 st.title("🚚 Hertfordshire Couriers Ltd")
-st.caption(f"Fleet Safety & Operations Network Portal • Helpline: {OFFICE_PHONE}")
+st.subheader("Driver Operations & Fleet Safety Portal")
 
-# Sidebar Identity Frame
-st.sidebar.header("🔐 Secure Access Profile")
-login_user = st.sidebar.text_input("Username Profile", value="driver1").strip()
+# Sidebar Login System
+st.sidebar.header("🔐 Secure Access")
+user_role = st.sidebar.selectbox("Access Level", ["Driver Portal", "Management Dashboard"])
+user_name = st.sidebar.text_input("Name", value="Driver Admin" if user_role == "Management Dashboard" else "John Smith")
 
-with sqlite3.connect(DB_FILE) as conn:
-    user_record = pd.read_sql_query("SELECT * FROM users WHERE username = ?", conn, params=(login_user,))
+current_date = datetime.now().strftime("%Y-%m-%d")
 
-if user_record.empty:
-    st.error("Access profile error. Please input a valid database identity code (e.g., 'driver1' or 'manager1').")
-    st.stop()
-
-user_role = user_record.iloc[0]['role']
-last_check_date = datetime.strptime(user_record.iloc[0]['last_licence_check'], "%Y-%m-%d")
-next_review_due = last_check_date + timedelta(days=182) # 6 months
-days_until_review = (next_review_due - datetime.now()).days
-licence_state = user_record.iloc[0]['licence_approved']
-
-# Global Licence Enforcement Engine
-if days_until_review <= 0 and licence_state == 1:
-    # Notice window expired; check manager validation status
-    licence_state = 0
+# ==========================================
+# 1. DRIVER PORTAL INTERFACE
+# ==========================================
+if user_role == "Driver Portal":
+    
+    # Check database to see driver's progress for today
     with sqlite3.connect(DB_FILE) as conn:
-        conn.cursor().execute("UPDATE users SET licence_approved = 0 WHERE username = ?", (login_user,))
-        conn.commit()
-
-# ==========================================
-# HARD CORE LOCKOUT GATES
-# ==========================================
-if licence_state == 0 and user_role != "Manager":
-    st.error("⛔ **CRITICAL LICENCE EXCLUSION: LOCKOUT ACTIVATED**")
-    st.warning("Your 6-month driving credentials review date has passed without verification.")
-    st.info(f"You are strictly barred from logging time or moving vehicles. Call the office immediately at **{OFFICE_PHONE}**.")
-    simulate_email(COMPANY_EMAIL, f"Driver Lockout Alert: {login_user}", f"Driver {login_user} was blocked due to overdue licence check.")
-    st.stop()
-
-if days_until_review == 0 and user_role != "Manager":
-    st.warning(f"⚠️ **48-Hour Urgent Notification**: Your mandatory licence review is due. Please contact administration within 48 hours to avoid account lockout.")
-
-# ==========================================
-# ROUTING MAIN COMPONENT FRAMES
-# ==========================================
-if user_role == "Driver":
-    current_date = datetime.now().strftime("%Y-%m-%d")
+        has_pre_defect = not pd.read_sql_query("SELECT 1 FROM defects WHERE driver_name = ? AND date = ? AND check_type = 'Pre-Work'", conn, params=(user_name, current_date)).empty
+        shift_data = pd.read_sql_query("SELECT status, start_time, end_time FROM shifts WHERE driver_name = ? AND date = ?", conn, params=(user_name, current_date))
     
-    with sqlite3.connect(DB_FILE) as conn:
-        has_morning_check = not pd.read_sql_query("SELECT 1 FROM defects_v3 WHERE driver_name = ? AND date = ? AND check_type = 'Morning'", conn, params=(login_user, current_date)).empty
-        active_activity = pd.read_sql_query("SELECT * FROM activities WHERE driver_name = ? AND date = ? AND end_time IS NULL LIMIT 1", conn, params=(login_user, current_date))
-        total_driving_df = pd.read_sql_query("SELECT SUM(cumulative_driving_mins) as total FROM activities WHERE driver_name = ? AND date = ? AND activity_type = 'Driving'", conn, params=(login_user, current_date))
+    if shift_data.empty:
+        shift_status = "Not Started"
+    else:
+        shift_status = shift_data.iloc[0]['status']
+
+    # Step-by-Step UI Guidance
+    st.info(f"Welcome back, **{user_name}**. Today's Date: `{current_date}`")
     
-    total_driving_mins = total_driving_df.iloc[0]['total'] if total_driving_df.iloc[0]['total'] else 0
-    
-    # 1. MORNING MANDATORY GATING SHEET
-    if not has_morning_check:
-        st.error("🛑 **Mandatory Inspection Blockade**")
-        st.info("Company regulations dictate a complete vehicle safety check and mileage capture before any shift metrics unlock.")
-        
-        with st.form("morning_walkaround"):
-            st.subheader("📋 Morning Walkaround Inspection Protocol")
-            mil = st.number_input("Vehicle Starting Mileage", min_value=0, step=1)
-            reg = st.text_input("Vehicle Registration Mark (VRM)").upper()
-            cl_in = st.selectbox("Interior Cleanliness", ["Excellent", "Fair", "Requires Attention"])
-            cl_out = st.selectbox("Exterior Cleanliness", ["Clean", "Dirty - Clean Required"])
-            straps = st.number_input("Count of Restraining Straps present (Min 5 required)", min_value=0, step=1)
-            trolley = st.radio("One Heavy-Duty Transport Trolley Present?", ["Yes", "No"])
-            locks = st.radio("All Security Load Compartment Doors Lock Correctly?", ["Yes", "No"])
-            tread = st.radio("Tyre Tread Depth and Pressures Visually Roadworthy?", ["Yes", "No"])
-            fuel = st.radio("Fuel Level: Completely Full Tank?", ["Yes", "No"])
+    # STEP 1: MANDATORY PRE-WORK DEFECT CHECK
+    st.markdown("### 🛑 Step 1: Pre-Work Walkaround Inspection")
+    if has_pre_defect:
+        st.success("✅ Pre-work defect report submitted successfully for today.")
+    else:
+        st.warning("⚠️ You must complete your vehicle inspection before starting your shift time.")
+        with st.form("pre_work_defect"):
+            veh_reg = st.text_input("Vehicle Registration (Plate)").upper()
+            defects_found = st.radio("Are any defects present before starting?", ["No Defects", "Defects Identified"])
+            defect_desc = st.text_area("Provide details of pre-existing defects (if any)")
             
-            fuel_file = st.file_uploader("Upload Fuel Gauge Photo (Mandatory if Tank Not Full)", type=["jpg","png"])
-            photo_in = st.file_uploader("Upload Inside Vehicle Capture Frame", type=["jpg","png"])
-            photo_out = st.file_uploader("Upload Exterior Asset Perimeter Capture", type=["jpg","png"])
-            
-            if st.form_submit_button("Lock & Submit Inspection Assets"):
-                if not reg or straps < 5 or trolley == "No" or tread == "No":
-                    st.error("🚨 Safety non-compliance or field omission. Ensure vehicle has 5 straps, 1 trolley, valid tires, and a VRM entry.")
+            if st.form_submit_button("Submit Pre-Work Inspection"):
+                if not veh_reg:
+                    st.error("Please enter your vehicle registration.")
                 else:
                     with sqlite3.connect(DB_FILE) as conn:
-                        conn.cursor().execute("""
-                            INSERT INTO defects_v3 (driver_name, date, check_type, mileage, clean_inside, clean_outside, straps_count, has_trolley, doors_locked, tyre_tread, fuel_full)
-                            VALUES (?, ?, 'Morning', ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (login_user, current_date, mil, cl_in, cl_out, straps, trolley, locks, tread, fuel))
+                        conn.cursor().execute(
+                            "INSERT INTO defects (driver_name, vehicle_reg, date, check_type, has_defects, details) VALUES (?, ?, ?, ?, ?, ?)",
+                            (user_name, veh_reg, current_date, "Pre-Work", defects_found, defect_desc if defects_found == "Defects Identified" else "None")
+                        )
                         conn.commit()
-                    st.success("Vehicle parameters stored safely. Driver interface features unlocked.")
+                    st.success("Inspection logged. Shift tracking unlocked!")
                     st.rerun()
-        st.stop()
 
-    # 2. RUNTIME ACTIVE DUTY CONTROLLER 
-    st.header("⚡ Active Duty Tracking Unit")
+    # STEP 2: SHIFT CLOCK-IN / CLOCK-OUT
+    st.markdown("### 🕒 Step 2: Shift Time Tracking")
     
-    # 10-Hour Driving Limit Intercept
-    if total_driving_mins >= 570: # 9 hours 30 mins
-        st.error("🚨 **CRITICAL SAFETY REACH WARNING: MAXIMUM DRIVING CAPACITY REACHED**")
-        st.markdown()
-    Hertfordshire Couriers Ltd policy strictly dictates a maximum driving boundary. 
+    # Disable tracking if pre-work check is missing
+    disable_shift = not has_pre_defect
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if shift_status == "Not Started":
+            if st.button("🚀 Start Shift & Record Time", disabled=disable_shift, use_container_width=True):
+                now_time = datetime.now().strftime("%H:%M:%S")
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.cursor().execute(
+                        "INSERT INTO shifts (driver_name, date, start_time, status) VALUES (?, ?, ?, 'Active')",
+                        (user_name, current_date, now_time)
+                    )
+                    conn.commit()
+                st.success(f"Shift started at {now_time}")
+                st.rerun()
+        elif shift_status in ["Active", "Completed"]:
+            st.metric("Shift Start Time", shift_data.iloc[0]['start_time'])
+
+    with col2:
+        if shift_status == "Active":
+            if st.button("🛑 Finish Shift & Record Time", use_container_width=True):
+                now_time = datetime.now().strftime("%H:%M:%S")
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.cursor().execute(
+                        "UPDATE shifts SET end_time = ?, status = 'Completed' WHERE driver_name = ? AND date = ?",
+                        (now_time, user_name, current_date)
+                    )
+                    conn.commit()
+                st.success(f"Shift closed at {now_time}")
+                st.rerun()
+        elif shift_status == "Completed":
+            st.metric("Shift Finish Time", shift_data.iloc[0]['end_time'])
+            st.success("🎉 Shift completed for today. Thank you!")
+
+    # STEP 3: END OF SHIFT DEFECT UPDATES
+    if shift_status == "Completed":
+        st.markdown("### 🔧 Step 3: End of Shift Vehicle Status Updates")
+        with sqlite3.connect(DB_FILE) as conn:
+            has_post_defect = not pd.read_sql_query("SELECT 1 FROM defects WHERE driver_name = ? AND date = ? AND check_type = 'End of Shift'", conn, params=(user_name, current_date)).empty
+        
+        if has_post_defect:
+            st.success("✅ End of shift updates recorded.")
+        else:
+            st.info("Log any new defects or changes that occurred during your shift below.")
+            with st.form("post_work_defect"):
+                post_defects = st.radio("Did any new defects occur during your routes today?", ["No New Defects", "New Defects to Report"])
+                post_desc = st.text_area("Describe any updates or changes (e.g. tyre wear notice, new stone chip)")
+                
+                if st.form_submit_button("Submit End of Shift Update"):
+                    with sqlite3.connect(DB_FILE) as conn:
+                        # Fetch original registration used in the morning
+                        reg_query = pd.read_sql_query("SELECT vehicle_reg FROM defects WHERE driver_name = ? AND date = ? LIMIT 1", conn, params=(user_name, current_date))
+                        active_reg = reg_query.iloc[0]['vehicle_reg'] if not reg_query.empty else "UNKNOWN"
+                        
+                        conn.cursor().execute(
+                            "INSERT INTO defects (driver_name, vehicle_reg, date, check_type, has_defects, details) VALUES (?, ?, ?, ?, ?, ?)",
+                            (user_name, active_reg, current_date, "End of Shift", post_defects, post_desc if post_defects == "New Defects to Report" else "None")
+                        )
+                        conn.commit()
+                    st.success("End of shift update saved.")
+                    st.rerun()
+
+# ==========================================
+# 2. MANAGEMENT DASHBOARD INTERFACE
+# ==========================================
+elif user_role == "Management Dashboard":
+    st.markdown("### 📊 Live Management Monitoring Station")
+    
+    tab1, tab2 = st.tabs(["🕒 Driver Timesheets", "🔧 Maintenance & Defect Tracking"])
+    
+    with tab1:
+        st.subheader("Driver Daily Shift Logs")
+        with sqlite3.connect(DB_FILE) as conn:
+            df_shifts = pd.read_sql_query("SELECT driver_name as [Driver], date as [Date], start_time as [Start Time], end_time as [Finish Time], status as [Shift Status] FROM shifts ORDER BY date DESC", conn)
+        if not df_shifts.empty:
+            st.dataframe(df_shifts, use_container_width=True)
+        else:
+            st.info("No active driver shifts logged in the system yet.")
+
+    with tab2:
+        st.subheader("Reported Fleet Defect Records")
+        with sqlite3.connect(DB_FILE) as conn:
+            df_defects = pd.read_sql_query("SELECT id, driver_name as [Driver], vehicle_reg as [Reg], date as [Date], check_type as [Inspection Type], has_defects as [Status], details as [Defect Details], resolved_status as [Action State] FROM defects", conn)
+        
+        if not df_defects.empty:
+            st.dataframe(df_defects, use_container_width=True)
+            
+            # Action controls to fix issues
+            st.markdown("---")
+            st.subheader("Update Defect Workshop Status")
+            with st.form("action_form"):
+                target_id = st.selectbox("Select Report ID to Update", df_defects['id'].tolist())
+                next_action = st.selectbox("Set Maintenance Status", ["Open", "In Workshop", "Resolved / Roadworthy"])
+                if st.form_submit_button("Update Records"):
+                    with sqlite3.connect(DB_FILE) as conn:
+                        conn.cursor().execute("UPDATE defects SET resolved_status = ? WHERE id = ?", (next_action, target_id))
+                        conn.commit()
